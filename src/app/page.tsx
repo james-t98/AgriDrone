@@ -1,12 +1,15 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Calendar, MapPin, ArrowRight } from "lucide-react";
+import { Calendar, MapPin, ArrowRight, Plane, ScanLine, FileText, ShieldCheck } from "lucide-react";
 import { FarmHealthScore } from "@/components/dashboard/FarmHealthScore";
 import { WeatherWidget } from "@/components/dashboard/WeatherWidget";
 import { DroneStatus } from "@/components/dashboard/DroneStatus";
 import { AlertsOverview } from "@/components/dashboard/AlertsOverview";
 import { KPIGrid } from "@/components/dashboard/KPIGrid";
+import { GlassyButton, GlassyIconButton } from "@/components/ui/GlassyButton";
+import { RotatingCard } from "@/components/ui/RotatingCard";
+import Link from "next/link";
 
 export default function DashboardPage() {
   const currentDate = new Date().toLocaleDateString("en-US", {
@@ -15,6 +18,13 @@ export default function DashboardPage() {
     month: "long",
     day: "numeric",
   });
+
+  const quickActions = [
+    { label: "Schedule Flight", icon: Plane, href: "/drones", variant: "default" as const },
+    { label: "Run Scan", icon: ScanLine, href: "/crop-health", variant: "purple" as const },
+    { label: "Generate Report", icon: FileText, href: "/reports", variant: "primary" as const },
+    { label: "Check Compliance", icon: ShieldCheck, href: "/compliance", variant: "default" as const },
+  ];
 
   return (
     <div className="space-y-6">
@@ -39,14 +49,11 @@ export default function DashboardPage() {
             </span>
           </div>
         </div>
-        <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium shadow-lg shadow-green-500/25 hover:shadow-green-500/40 transition-shadow"
-        >
-          View AI Insights
-          <ArrowRight className="w-4 h-4" />
-        </motion.button>
+        <Link href="/agent">
+          <GlassyButton variant="primary" icon={<ArrowRight className="w-4 h-4" />}>
+            View AI Insights
+          </GlassyButton>
+        </Link>
       </motion.div>
 
       {/* KPI Grid */}
@@ -56,7 +63,9 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Farm Health Score - Takes 1 column */}
         <div className="lg:col-span-1">
-          <FarmHealthScore score={87} trend="up" previousScore={82} />
+          <RotatingCard rotationIntensity={5}>
+            <FarmHealthScore score={87} trend="up" previousScore={82} />
+          </RotatingCard>
         </div>
 
         {/* Weather Widget - Takes 1 column */}
@@ -83,25 +92,27 @@ export default function DashboardPage() {
         >
           <h3 className="text-lg font-semibold text-[var(--foreground)] mb-4">Quick Actions</h3>
           <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: "Schedule Flight", icon: "✈️", color: "from-blue-500 to-blue-600" },
-              { label: "Run Scan", icon: "📡", color: "from-purple-500 to-purple-600" },
-              { label: "Generate Report", icon: "📊", color: "from-green-500 to-green-600" },
-              { label: "Check Compliance", icon: "✅", color: "from-amber-500 to-orange-500" },
-            ].map((action, i) => (
-              <motion.button
-                key={action.label}
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.4 + i * 0.1 }}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className={`p-4 rounded-xl bg-gradient-to-br ${action.color} text-white font-medium text-sm shadow-lg hover:shadow-xl transition-shadow flex flex-col items-center gap-2`}
-              >
-                <span className="text-2xl">{action.icon}</span>
-                {action.label}
-              </motion.button>
-            ))}
+            {quickActions.map((action, i) => {
+              const Icon = action.icon;
+              return (
+                <Link key={action.label} href={action.href}>
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.4 + i * 0.1 }}
+                  >
+                    <GlassyButton
+                      variant={action.variant}
+                      icon={<Icon className="w-5 h-5" />}
+                      fullWidth
+                      className="h-20 flex-col"
+                    >
+                      {action.label}
+                    </GlassyButton>
+                  </motion.div>
+                </Link>
+              );
+            })}
           </div>
         </motion.div>
       </div>
