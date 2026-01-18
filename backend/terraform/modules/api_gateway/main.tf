@@ -1,0 +1,124 @@
+# terraform/modules/api_gateway/main.tf
+# API Gateway for Frontend Communication
+
+variable "project_name" { type = string }
+variable "aws_region" { type = string }
+variable "cv_lambda_invoke_arn" { type = string }
+variable "sensor_lambda_invoke_arn" { type = string }
+variable "cv_lambda_function_name" { type = string }
+variable "sensor_lambda_function_name" { type = string }
+variable "dynamodb_cv_table_arn" { type = string }
+variable "dynamodb_sensor_table_arn" { type = string }
+variable "dynamodb_flight_table_arn" { type = string }
+variable "s3_reports_bucket_arn" { type = string }
+
+# HTTP API (cheaper than REST API)
+resource "aws_apigatewayv2_api" "main" {
+  name          = "${var.project_name}-api"
+  protocol_type = "HTTP"
+  
+  cors_configuration {
+    allow_origins = ["http://localhost:5173", "https://*.vercel.app"]
+    allow_methods = ["GET", "POST", "OPTIONS"]
+    allow_headers = ["Content-Type", "Authorization"]
+    max_age       = 3600
+  }
+}
+
+# Stage
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.main.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+# Integration: CV Inference Lambda
+resource "aws_apigatewayv2_integration" "cv_lambda" {
+  api_id               = aws_apigatewayv2_api.main.id
+  integration_type     = "AWS_PROXY"
+  integration_uri      = var.cv_lambda_invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "cv_classify" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "POST /classify"
+  target    = "integrations/${aws_apigatewayv2_integration.cv_lambda.id}"
+}
+
+resource "aws_lambda_permission" "api_gateway_cv" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = var.cv_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
+}
+
+# Integration: Sensor Data Generator
+resource "aws_apigatewayv2_integration" "sensor_lambda" {
+  api_id               = aws_apigatewayv2_api.main.id
+  integration_type     = "AWS_PROXY"
+  integration_uri      = var.sensor_lambda_invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "sensor_stream" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "GET /sensor-data/stream"
+  target    = "integrations/${aws_apigatewayv2_integration.sensor_lambda.id}"
+}
+
+resource "aws_lambda_permission" "api_gateway_sensor" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = var.sensor_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
+}
+
+# Direct DynamoDB Integration for sensor-data GET
+resource "aws_iam_role" "api_gateway_dynamodb" {
+  name = "${var.project_name}-api-gateway-dynamodb-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "apigateway.amazonaws.com"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "api_gateway_dynamodb_policy" {
+  name = "${var.project_name}-api-dynamodb-policy"
+  role = aws_iam_role.api_gateway_dynamodb.id
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ]
+      Resource = [
+        var.dynamodb_cv_table_arn,
+        "${var.dynamodb_cv_table_arn}/index/*",
+        var.dynamodb_sensor_table_arn,
+        var.dynamodb_flight_table_arn
+      ]
+    }]
+  })
+}
+
+# Outputs
+output "api_gateway_url" {
+  value = aws_apigatewayv2_stage.default.invoke_url
+}
+
+output "api_gateway_id" {
+  value = aws_apigatewayv2_api.main.id
+}
