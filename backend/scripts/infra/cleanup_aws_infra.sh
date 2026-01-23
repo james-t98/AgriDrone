@@ -1,7 +1,7 @@
+#!/bin/bash
 # scripts/infra/cleanup_aws_infra.sh
 # Cleanup AgriDrone Demo Infrastructure
 
-#!/bin/bash
 set -e
 
 # Colors for output
@@ -13,7 +13,11 @@ NC='\033[0m' # No Color
 
 PROJECT_NAME="agridrone-demo"
 AWS_REGION="eu-west-1"
-TERRAFORM_DIR="terraform"
+
+# Get the script directory and project paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TERRAFORM_DIR="${SCRIPT_DIR}/../../terraform"
+BACKEND_DIR="${SCRIPT_DIR}/../.."
 
 echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${RED}║   AgriDrone AI Demo - Infrastructure Cleanup              ║${NC}"
@@ -45,17 +49,31 @@ echo -e "${YELLOW}Starting cleanup process...${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo ""
 
+# Check if Terraform state exists and get current variable values
+DEPLOY_CV_LAMBDA="false"
+if [ -f "${TERRAFORM_DIR}/terraform.tfstate" ]; then
+    # Try to detect if CV Lambda was deployed by checking state
+    if grep -q "aws_lambda_function.cv_inference" "${TERRAFORM_DIR}/terraform.tfstate" 2>/dev/null; then
+        DEPLOY_CV_LAMBDA="true"
+        echo -e "${BLUE}ℹ️  Detected CV Lambda deployment in state${NC}"
+    fi
+fi
+
 # Get bucket names from Terraform output or use defaults
-cd ${TERRAFORM_DIR}
+S3_BUCKET_IMAGES="${PROJECT_NAME}-images"
+S3_BUCKET_REPORTS="${PROJECT_NAME}-reports"
+S3_BUCKET_LEGAL="${PROJECT_NAME}-legal"
 
-S3_BUCKET_IMAGES=$(terraform output -raw s3_bucket_images 2>/dev/null || echo "${PROJECT_NAME}-images")
-S3_BUCKET_REPORTS=$(terraform output -raw s3_bucket_reports 2>/dev/null || echo "${PROJECT_NAME}-reports")
-S3_BUCKET_LEGAL=$(terraform output -raw s3_bucket_legal 2>/dev/null || echo "${PROJECT_NAME}-legal")
+if [ -f "${TERRAFORM_DIR}/terraform.tfstate" ]; then
+    cd "${TERRAFORM_DIR}"
+    S3_BUCKET_IMAGES=$(terraform output -raw s3_bucket_images 2>/dev/null || echo "${PROJECT_NAME}-images")
+    S3_BUCKET_REPORTS=$(terraform output -raw s3_bucket_reports 2>/dev/null || echo "${PROJECT_NAME}-reports")
+    S3_BUCKET_LEGAL=$(terraform output -raw s3_bucket_legal 2>/dev/null || echo "${PROJECT_NAME}-legal")
+    cd "${SCRIPT_DIR}"
+fi
 
-cd ..
-
-# Empty S3 buckets
-echo -e "${YELLOW}[1/6] Emptying S3 buckets...${NC}"
+# Empty S3 buckets (must be done before terraform destroy)
+echo -e "${YELLOW}[1/5] Emptying S3 buckets...${NC}"
 
 empty_bucket() {
     local bucket=$1
@@ -64,22 +82,32 @@ empty_bucket() {
         aws s3 rm "s3://${bucket}" --recursive --region ${AWS_REGION} 2>/dev/null || true
         
         # Delete all versions (if versioning enabled)
+        echo "    Deleting object versions..."
         aws s3api list-object-versions \
             --bucket "${bucket}" \
             --region ${AWS_REGION} \
             --query 'Versions[].{Key:Key,VersionId:VersionId}' \
             --output json 2>/dev/null | \
-        jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' | \
-        xargs -I {} aws s3api delete-object --bucket "${bucket}" --region ${AWS_REGION} {} 2>/dev/null || true
+        jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' 2>/dev/null | \
+        while read -r line; do
+            if [ ! -z "$line" ]; then
+                aws s3api delete-object --bucket "${bucket}" --region ${AWS_REGION} $line 2>/dev/null || true
+            fi
+        done
         
         # Delete delete markers
+        echo "    Deleting delete markers..."
         aws s3api list-object-versions \
             --bucket "${bucket}" \
             --region ${AWS_REGION} \
             --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
             --output json 2>/dev/null | \
-        jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' | \
-        xargs -I {} aws s3api delete-object --bucket "${bucket}" --region ${AWS_REGION} {} 2>/dev/null || true
+        jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' 2>/dev/null | \
+        while read -r line; do
+            if [ ! -z "$line" ]; then
+                aws s3api delete-object --bucket "${bucket}" --region ${AWS_REGION} $line 2>/dev/null || true
+            fi
+        done
         
         echo -e "    ${GREEN}✓ ${bucket} emptied${NC}"
     else
@@ -94,8 +122,8 @@ empty_bucket "${S3_BUCKET_LEGAL}"
 echo -e "${GREEN}✓ S3 buckets emptied${NC}"
 echo ""
 
-# Delete ECR images
-echo -e "${YELLOW}[2/6] Deleting ECR repository images...${NC}"
+# Delete ECR images and repository (must be done before terraform destroy)
+echo -e "${YELLOW}[2/5] Deleting ECR repository...${NC}"
 
 ECR_REPO_NAME="${PROJECT_NAME}-cv-model"
 
@@ -109,7 +137,7 @@ if aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${
         --query 'imageIds[*]' \
         --output json 2>/dev/null || echo "[]")
     
-    if [ "$IMAGE_IDS" != "[]" ]; then
+    if [ "$IMAGE_IDS" != "[]" ] && [ "$IMAGE_IDS" != "null" ] && [ ! -z "$IMAGE_IDS" ]; then
         aws ecr batch-delete-image \
             --repository-name ${ECR_REPO_NAME} \
             --region ${AWS_REGION} \
@@ -118,6 +146,14 @@ if aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${
     else
         echo -e "    ${YELLOW}⊘ No images to delete${NC}"
     fi
+    
+    # Force delete the ECR repository itself (backup in case terraform doesn't delete it)
+    echo "  Force deleting ECR repository: ${ECR_REPO_NAME}"
+    aws ecr delete-repository \
+        --repository-name ${ECR_REPO_NAME} \
+        --region ${AWS_REGION} \
+        --force &> /dev/null || true
+    echo -e "    ${GREEN}✓ ECR repository deleted${NC}"
 else
     echo -e "  ${YELLOW}⊘ ECR repository not found${NC}"
 fi
@@ -125,38 +161,32 @@ fi
 echo -e "${GREEN}✓ ECR cleanup complete${NC}"
 echo ""
 
-# Stop EventBridge rules
-echo -e "${YELLOW}[3/6] Disabling EventBridge rules...${NC}"
+# Destroy Terraform infrastructure (this handles EventBridge, Lambda permissions, etc.)
+echo -e "${YELLOW}[3/5] Destroying Terraform infrastructure...${NC}"
 
-RULE_NAME="${PROJECT_NAME}-sensor-schedule"
+cd "${TERRAFORM_DIR}"
 
-if aws events describe-rule --name ${RULE_NAME} --region ${AWS_REGION} &> /dev/null; then
-    echo "  Removing targets from rule: ${RULE_NAME}"
+if [ -f "terraform.tfstate" ]; then
+    echo -e "  ${BLUE}Running terraform destroy...${NC}"
+    echo -e "  ${BLUE}(deploy_cv_lambda=${DEPLOY_CV_LAMBDA})${NC}"
     
-    # Get target IDs
-    TARGET_IDS=$(aws events list-targets-by-rule \
-        --rule ${RULE_NAME} \
-        --region ${AWS_REGION} \
-        --query 'Targets[].Id' \
-        --output text 2>/dev/null || echo "")
+    terraform destroy \
+        -var="aws_region=${AWS_REGION}" \
+        -var="project_name=${PROJECT_NAME}" \
+        -var="deploy_cv_lambda=${DEPLOY_CV_LAMBDA}" \
+        -var="alert_email=[email protected]" \
+        -auto-approve
     
-    if [ ! -z "$TARGET_IDS" ]; then
-        aws events remove-targets \
-            --rule ${RULE_NAME} \
-            --region ${AWS_REGION} \
-            --ids $TARGET_IDS &> /dev/null || true
-    fi
-    
-    echo -e "    ${GREEN}✓ EventBridge rule disabled${NC}"
+    echo -e "${GREEN}✓ Terraform infrastructure destroyed${NC}"
 else
-    echo -e "  ${YELLOW}⊘ EventBridge rule not found${NC}"
+    echo -e "${YELLOW}⊘ No Terraform state found${NC}"
 fi
 
-echo -e "${GREEN}✓ EventBridge cleanup complete${NC}"
+cd "${SCRIPT_DIR}"
 echo ""
 
-# Delete CloudWatch log groups
-echo -e "${YELLOW}[4/6] Deleting CloudWatch log groups...${NC}"
+# Delete any remaining CloudWatch log groups (not managed by Terraform)
+echo -e "${YELLOW}[4/5] Deleting remaining CloudWatch log groups...${NC}"
 
 LOG_GROUPS=$(aws logs describe-log-groups \
     --log-group-name-prefix "/aws/lambda/${PROJECT_NAME}" \
@@ -173,45 +203,57 @@ if [ ! -z "$LOG_GROUPS" ]; then
     done
     echo -e "${GREEN}✓ Log groups deleted${NC}"
 else
-    echo -e "${YELLOW}⊘ No log groups found${NC}"
-fi
-echo ""
-
-# Destroy Terraform infrastructure
-echo -e "${YELLOW}[5/6] Destroying Terraform infrastructure...${NC}"
-
-cd ${TERRAFORM_DIR}
-
-if [ -f "terraform.tfstate" ]; then
-    terraform destroy \
-        -var="aws_region=${AWS_REGION}" \
-        -var="project_name=${PROJECT_NAME}" \
-        -auto-approve
-    
-    echo -e "${GREEN}✓ Terraform infrastructure destroyed${NC}"
-else
-    echo -e "${YELLOW}⊘ No Terraform state found${NC}"
+    echo -e "${YELLOW}⊘ No remaining log groups found${NC}"
 fi
 
-cd ..
+# Also clean up API Gateway log groups if any
+API_LOG_GROUPS=$(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/apigateway/${PROJECT_NAME}" \
+    --region ${AWS_REGION} \
+    --query 'logGroups[].logGroupName' \
+    --output text 2>/dev/null || echo "")
+
+if [ ! -z "$API_LOG_GROUPS" ]; then
+    for log_group in $API_LOG_GROUPS; do
+        echo "  Deleting: ${log_group}"
+        aws logs delete-log-group \
+            --log-group-name ${log_group} \
+            --region ${AWS_REGION} 2>/dev/null || true
+    done
+fi
+
 echo ""
 
 # Clean up local files
-echo -e "${YELLOW}[6/6] Cleaning up local files...${NC}"
+echo -e "${YELLOW}[5/5] Cleaning up local files...${NC}"
 
-if [ -f ".env" ]; then
-    rm .env
-    echo -e "  ${GREEN}✓ Deleted .env${NC}"
+# Get the application root directory
+APP_ROOT_DIR="${SCRIPT_DIR}/../../.."
+
+if [ -f "${APP_ROOT_DIR}/.env" ]; then
+    rm "${APP_ROOT_DIR}/.env"
+    echo -e "  ${GREEN}✓ Deleted .env from application root${NC}"
 fi
 
-if [ -f "scripts/config.json" ]; then
-    rm scripts/config.json
+if [ -f "${BACKEND_DIR}/scripts/config.json" ]; then
+    rm "${BACKEND_DIR}/scripts/config.json"
     echo -e "  ${GREEN}✓ Deleted scripts/config.json${NC}"
 fi
 
 if [ -f "${TERRAFORM_DIR}/tfplan" ]; then
-    rm ${TERRAFORM_DIR}/tfplan
+    rm "${TERRAFORM_DIR}/tfplan"
     echo -e "  ${GREEN}✓ Deleted Terraform plan${NC}"
+fi
+
+# Clean up Lambda zip files
+if [ -f "${TERRAFORM_DIR}/modules/lambda/sensor_lambda.zip" ]; then
+    rm "${TERRAFORM_DIR}/modules/lambda/sensor_lambda.zip"
+    echo -e "  ${GREEN}✓ Deleted sensor Lambda zip${NC}"
+fi
+
+if [ -f "${TERRAFORM_DIR}/modules/lambda/query_lambda.zip" ]; then
+    rm "${TERRAFORM_DIR}/modules/lambda/query_lambda.zip"
+    echo -e "  ${GREEN}✓ Deleted query Lambda zip${NC}"
 fi
 
 echo -e "${GREEN}✓ Local cleanup complete${NC}"
@@ -237,6 +279,6 @@ echo -e "   CloudWatch logs may persist for up to 24 hours"
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}To redeploy:${NC}"
-echo -e "   ${GREEN}bash scripts/infra/deploy_aws_infra.sh${NC}"
+echo -e "   ${GREEN}cd ${SCRIPT_DIR} && bash deploy_aws_infra.sh${NC}"
 echo ""
 echo -e "${GREEN}Thank you for using AgriDrone AI Demo! 🚁🌾${NC}"

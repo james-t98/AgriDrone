@@ -14,8 +14,11 @@ NC='\033[0m' # No Color
 # Configuration
 PROJECT_NAME="agridrone-demo"
 AWS_REGION="eu-west-1"
-TERRAFORM_DIR="terraform"
 ALERT_EMAIL="${ALERT_EMAIL:-[email protected]}"
+
+# Get the script directory for absolute path resolution
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TERRAFORM_DIR="${SCRIPT_DIR}/../../terraform"
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   AgriDrone AI Demo - Infrastructure Deployment           ║${NC}"
@@ -52,47 +55,27 @@ echo -e "${GREEN}✓ Region: ${AWS_REGION}${NC}"
 echo -e "${GREEN}✓ All prerequisites met${NC}"
 echo ""
 
-# Build and push CV model Docker image
-echo -e "${YELLOW}[2/7] Building and pushing CV model Docker image...${NC}"
+# Build and push CV model Docker image (if Dockerfile exists)
+echo -e "${YELLOW}[2/7] Checking CV model Docker image setup...${NC}"
 
 ECR_REPO_NAME="${PROJECT_NAME}-cv-model"
 ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
 
-# Check if ECR repository exists, create if not
-if ! aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${AWS_REGION} &> /dev/null; then
-    echo "Creating ECR repository: ${ECR_REPO_NAME}"
-    aws ecr create-repository \
-        --repository-name ${ECR_REPO_NAME} \
-        --region ${AWS_REGION} \
-        --image-scanning-configuration scanOnPush=true \
-        --tags Key=Project,Value=AgriDrone-Demo
-fi
+# Note: ECR repository is created by Terraform, not here
+# We'll build and push the Docker image after Terraform creates the ECR repo
 
-# Login to ECR
-echo "Logging in to ECR..."
-aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-# Build Docker image
-echo "Building Docker image..."
 if [ -d "lambda/cv_inference" ]; then
-    cd lambda/cv_inference
-    docker build -t ${ECR_REPO_NAME}:latest .
-    docker tag ${ECR_REPO_NAME}:latest ${ECR_URI}:latest
-    
-    # Push to ECR
-    echo "Pushing image to ECR..."
-    docker push ${ECR_URI}:latest
-    cd ../..
-    echo -e "${GREEN}✓ CV model image pushed to ECR${NC}"
+    echo -e "${BLUE}ℹ️  CV inference Docker directory found. Will build after Terraform creates ECR.${NC}"
+    BUILD_CV_IMAGE=true
 else
     echo -e "${YELLOW}⚠ lambda/cv_inference directory not found. Skipping Docker build.${NC}"
-    echo -e "${YELLOW}  You'll need to push the image manually later.${NC}"
+    BUILD_CV_IMAGE=false
 fi
 echo ""
 
 # Initialize Terraform
 echo -e "${YELLOW}[3/7] Initializing Terraform...${NC}"
-cd ${TERRAFORM_DIR}
+cd "${TERRAFORM_DIR}"
 
 if [ ! -f "terraform.tfstate" ]; then
     terraform init
@@ -100,6 +83,22 @@ else
     terraform init -upgrade
 fi
 echo -e "${GREEN}✓ Terraform initialized${NC}"
+echo ""
+
+# Check if ECR repo exists in AWS but not in Terraform state - if so, import it
+echo -e "${YELLOW}Checking for existing ECR repository...${NC}"
+if aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${AWS_REGION} &> /dev/null; then
+    # Check if it's already in the Terraform state
+    if ! terraform state show module.lambda_functions.aws_ecr_repository.cv_model &> /dev/null; then
+        echo -e "${BLUE}ℹ️  ECR repository exists but not in Terraform state. Importing...${NC}"
+        terraform import module.lambda_functions.aws_ecr_repository.cv_model ${ECR_REPO_NAME} || true
+        echo -e "${GREEN}✓ ECR repository imported${NC}"
+    else
+        echo -e "${GREEN}✓ ECR repository already in Terraform state${NC}"
+    fi
+else
+    echo -e "${YELLOW}⊘ ECR repository does not exist yet (Terraform will create it)${NC}"
+fi
 echo ""
 
 # Validate Terraform configuration
@@ -151,11 +150,14 @@ SNS_TOPIC_ARN=$(terraform output -raw sns_topic_arn 2>/dev/null || echo "")
 
 cd ..
 
-# Generate .env file for frontend
-echo -e "${YELLOW}Generating .env file for frontend...${NC}"
+# Generate .env file at application root
+echo -e "${YELLOW}Generating .env file...${NC}"
 
-cat > .env << EOF
-# AgriDrone Demo - Frontend Environment Variables
+# Get the application root directory (4 levels up from terraform: terraform -> backend -> scripts -> infra)
+APP_ROOT_DIR="${SCRIPT_DIR}/../../.."
+
+cat > "${APP_ROOT_DIR}/.env" << EOF
+# AgriDrone Demo - Environment Variables
 # Generated on $(date)
 
 # API Gateway
@@ -182,7 +184,7 @@ VITE_FIELD_ZONES=Zone_1,Zone_2,Zone_3
 # VITE_CREWAI_WORKSPACE_URL=https://app.crewai.com/workspace/agridrone-demo
 EOF
 
-echo -e "${GREEN}✓ .env file created${NC}"
+echo -e "${GREEN}✓ .env file created at ${APP_ROOT_DIR}/.env${NC}"
 echo ""
 
 # Generate backend config for scripts

@@ -4,10 +4,23 @@
 import boto3
 import time
 import random
+import json
+import os
 from decimal import Decimal
 
-dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('agridrone-demo-cv-results')
+# Load configuration
+try:
+    with open('scripts/config.json', 'r') as f:
+        config = json.load(f)
+    AWS_REGION = config['aws_region']
+    TABLE_NAME = config['dynamodb_tables']['cv_results']
+except Exception as e:
+    print(f"❌ Error loading config: {e}")
+    print("Ensure you are running from the backend directory and scripts/config.json exists")
+    exit(1)
+
+dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+table = dynamodb.Table(TABLE_NAME)
 
 DISEASES = ['late_blight', 'early_blight', 'leaf_curl', None]
 ZONES = ['Zone_1', 'Zone_2', 'Zone_3']
@@ -31,7 +44,7 @@ def generate_cv_result(day_offset, index):
         'timestamp': timestamp,
         'farm_id': 'NL_Farm_001',
         'field_zone': zone,
-        's3_uri': f"s3://agridrone-demo-images/2026-01-17/{classification}/img_{index:04d}.jpg",
+        's3_uri': f"s3://agridrone-demo-images/NL_Farm_001/2026-01-17/{classification}/img_{index:04d}.jpg",
         'classification': classification,
         'disease_type': disease_type,
         'confidence': Decimal(str(round(random.uniform(0.75, 0.98), 2))),
@@ -42,7 +55,9 @@ def generate_cv_result(day_offset, index):
             'height': random.randint(100, 250)
         },
         'severity_score': Decimal(str(round(random.uniform(3, 9), 1))) if classification == 'diseased' else None,
-        'affected_area_percentage': Decimal(str(round(random.uniform(5, 40), 1))) if classification == 'diseased' else None
+        'affected_area_percentage': Decimal(str(round(random.uniform(5, 40), 1))) if classification == 'diseased' else None,
+        'model_version': 'yolov8-nano-v1.0',
+        'processed_by': 'cv_inference_lambda'
     }
 
 def main():

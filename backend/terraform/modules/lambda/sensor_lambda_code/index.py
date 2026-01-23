@@ -33,6 +33,12 @@ def generate_sensor_reading(sensor):
     """Generate realistic sensor data with slight variations"""
     timestamp = int(time.time())
     
+    # Determine sensor type
+    if sensor["sensor_id"] == "weather_station_main":
+        sensor_type = "weather"
+    else:
+        sensor_type = "soil"
+    
     # Base values with realistic ranges for Netherlands agriculture
     if sensor["field_zone"] == "Zone_3":
         # Zone 3 has higher moisture (correlates with fungal disease)
@@ -44,11 +50,24 @@ def generate_sensor_reading(sensor):
     if random.random() < 0.05:
         moisture = round(random.uniform(85, 95), 1)  # Anomaly: very high moisture
     
+    # Generate battery level (70-100% for healthy sensors)
+    battery_level = random.randint(70, 100)
+    
+    # Status: mostly online, occasionally calibrating
+    status_roll = random.random()
+    if status_roll < 0.95:
+        status = "online"
+    elif status_roll < 0.99:
+        status = "calibrating"
+    else:
+        status = "offline"
+    
     reading = {
         "sensor_id": sensor["sensor_id"],
         "timestamp": timestamp,
         "farm_id": farm_id,
         "field_zone": sensor["field_zone"],
+        "sensor_type": sensor_type,
         "moisture_percentage": Decimal(str(moisture)),
         "pH_level": Decimal(str(round(random.uniform(6.5, 7.2), 2))),
         "temperature_celsius": Decimal(str(round(random.uniform(5, 15), 1))),
@@ -56,11 +75,13 @@ def generate_sensor_reading(sensor):
             "nitrogen": random.randint(35, 55),
             "phosphorus": random.randint(18, 28),
             "potassium": random.randint(30, 45)
-        }
+        },
+        "battery_level": battery_level,
+        "status": status
     }
     
     # Weather station has different data
-    if sensor["sensor_id"] == "weather_station_main":
+    if sensor_type == "weather":
         reading["wind_speed_kmh"] = Decimal(str(round(random.uniform(5, 25), 1)))
         reading["humidity_percentage"] = Decimal(str(round(random.uniform(60, 90), 1)))
         reading["precipitation_mm"] = Decimal(str(round(random.uniform(0, 5), 2)))

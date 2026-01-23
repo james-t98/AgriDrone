@@ -16,7 +16,7 @@ resource "aws_s3_bucket" "images" {
 
 resource "aws_s3_bucket_versioning" "images" {
   bucket = aws_s3_bucket.images.id
-  
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -24,11 +24,14 @@ resource "aws_s3_bucket_versioning" "images" {
 
 resource "aws_s3_bucket_lifecycle_configuration" "images" {
   bucket = aws_s3_bucket.images.id
-  
+
   rule {
     id     = "transition_to_glacier"
     status = "Enabled"
-    
+
+    # Apply to all objects in the bucket
+    filter {}
+
     transition {
       days          = 90
       storage_class = "GLACIER"
@@ -38,7 +41,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "images" {
 
 resource "aws_s3_bucket_public_access_block" "images" {
   bucket = aws_s3_bucket.images.id
-  
+
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -47,7 +50,7 @@ resource "aws_s3_bucket_public_access_block" "images" {
 
 resource "aws_s3_bucket_cors_configuration" "images" {
   bucket = aws_s3_bucket.images.id
-  
+
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["GET", "PUT", "POST"]
@@ -64,7 +67,7 @@ resource "aws_s3_bucket" "reports" {
 
 resource "aws_s3_bucket_versioning" "reports" {
   bucket = aws_s3_bucket.reports.id
-  
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -72,7 +75,7 @@ resource "aws_s3_bucket_versioning" "reports" {
 
 resource "aws_s3_bucket_public_access_block" "reports" {
   bucket = aws_s3_bucket.reports.id
-  
+
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -86,7 +89,7 @@ resource "aws_s3_bucket" "legal" {
 
 resource "aws_s3_bucket_versioning" "legal" {
   bucket = aws_s3_bucket.legal.id
-  
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -94,7 +97,7 @@ resource "aws_s3_bucket_versioning" "legal" {
 
 resource "aws_s3_bucket_public_access_block" "legal" {
   bucket = aws_s3_bucket.legal.id
-  
+
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
