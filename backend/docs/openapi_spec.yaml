@@ -1,0 +1,493 @@
+openapi: 3.0.3
+info:
+  title: AgriDrone AI Demo API
+  description: REST API for drone-based agricultural monitoring system
+  version: 1.0.0
+  contact:
+    name: AgriDrone Support
+    email: [email protected]
+
+servers:
+  - url: https://{api-id}.execute-api.eu-west-1.amazonaws.com
+    description: AWS API Gateway (HTTP API)
+
+tags:
+  - name: Computer Vision
+    description: Image classification and disease detection
+  - name: Sensors
+    description: IoT sensor data retrieval
+  - name: Flights
+    description: Drone flight logs and coverage
+  - name: Reports
+    description: Agent-generated reports
+
+paths:
+  /classify:
+    post:
+      tags:
+        - Computer Vision
+      summary: Classify plant image for disease detection
+      description: Upload base64-encoded image for YOLOv8 inference
+      operationId: classifyImage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - image
+                - farm_id
+              properties:
+                image:
+                  type: string
+                  format: byte
+                  description: Base64-encoded JPEG/PNG image
+                  example: "/9j/4AAQSkZJRgABAQAA..."
+                farm_id:
+                  type: string
+                  description: Farm identifier
+                  example: "NL_Farm_001"
+                field_zone:
+                  type: string
+                  description: Field zone identifier
+                  example: "Zone_3"
+                drone_id:
+                  type: string
+                  description: Drone identifier (optional)
+                  example: "drone_001"
+      responses:
+        '200':
+          description: Classification successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CVResult'
+        '400':
+          description: Invalid input (missing image or farm_id)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Inference error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /cv-results:
+    get:
+      tags:
+        - Computer Vision
+      summary: Get historical CV results
+      description: Retrieve classification results for a farm within date range
+      operationId: getCVResults
+      parameters:
+        - name: farm_id
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "NL_Farm_001"
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: int64
+          description: Start timestamp (Unix epoch)
+          example: "1737036000"
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: int64
+          description: End timestamp (Unix epoch)
+          example: "1737122400"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+          example: 50
+      responses:
+        '200':
+          description: Results retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CVResult'
+                  count:
+                    type: integer
+                    example: 42
+        '400':
+          description: Missing farm_id parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sensor-data:
+    get:
+      tags:
+        - Sensors
+      summary: Get sensor readings
+      description: Retrieve IoT sensor data for specific sensors or farm
+      operationId: getSensorData
+      parameters:
+        - name: sensor_id
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "soil_sensor_zone1_01"
+        - name: farm_id
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "NL_Farm_001"
+        - name: start_timestamp
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          example: 1737036000
+        - name: end_timestamp
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+          example: 1737122400
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          example: 50
+      responses:
+        '200':
+          description: Sensor data retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SensorReading'
+                  count:
+                    type: integer
+
+  /sensor-data/stream:
+    get:
+      tags:
+        - Sensors
+      summary: Trigger sensor data generation
+      description: Manually invoke mock sensor generator (demo only)
+      operationId: generateSensorData
+      parameters:
+        - name: farm_id
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "NL_Farm_001"
+      responses:
+        '200':
+          description: Sensor generation triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "generating"
+                  message:
+                    type: string
+                    example: "Generated 10 sensor readings"
+                  timestamp:
+                    type: integer
+                    example: 1737122222
+
+  /flights:
+    get:
+      tags:
+        - Flights
+      summary: Get flight logs
+      description: Retrieve drone flight history
+      operationId: getFlightLogs
+      parameters:
+        - name: farm_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: drone_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: flight_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          example: "2026-01-17"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Flight logs retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlightLog'
+
+  /reports/{date}:
+    get:
+      tags:
+        - Reports
+      summary: Get daily report
+      description: Retrieve agent-generated report for specific date
+      operationId: getDailyReport
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+          example: "2026-01-17"
+        - name: farm_id
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "NL_Farm_001"
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [markdown, json, pdf]
+            default: markdown
+      responses:
+        '200':
+          description: Report retrieved
+          content:
+            text/markdown:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentOutput'
+        '404':
+          description: Report not found
+
+components:
+  schemas:
+    CVResult:
+      type: object
+      required:
+        - image_id
+        - timestamp
+        - classification
+        - confidence
+      properties:
+        image_id:
+          type: string
+          example: "img_20260117_143022_zone3"
+        timestamp:
+          type: integer
+          format: int64
+          example: 1737122222
+        farm_id:
+          type: string
+          example: "NL_Farm_001"
+        field_zone:
+          type: string
+          example: "Zone_3"
+        s3_uri:
+          type: string
+          format: uri
+          example: "s3://agridrone-demo-images/NL_Farm_001/2026-01-17/diseased/143022.jpg"
+        classification:
+          type: string
+          enum: [healthy, diseased, pest, weed]
+          example: "diseased"
+        disease_type:
+          type: string
+          nullable: true
+          enum: [late_blight, early_blight, leaf_curl]
+          example: "late_blight"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.92
+        bbox_coords:
+          type: object
+          properties:
+            x:
+              type: integer
+            y:
+              type: integer
+            width:
+              type: integer
+            height:
+              type: integer
+        severity_score:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0
+          maximum: 10
+          example: 7.5
+        model_version:
+          type: string
+          example: "yolov8-nano-v1.0"
+
+    SensorReading:
+      type: object
+      required:
+        - sensor_id
+        - timestamp
+      properties:
+        sensor_id:
+          type: string
+          example: "soil_sensor_zone1_01"
+        timestamp:
+          type: integer
+          format: int64
+        farm_id:
+          type: string
+        field_zone:
+          type: string
+        sensor_type:
+          type: string
+          enum: [soil, weather, crop]
+        moisture_percentage:
+          type: number
+          format: float
+        pH_level:
+          type: number
+          format: float
+        temperature_celsius:
+          type: number
+          format: float
+        NPK_values:
+          type: object
+          properties:
+            nitrogen:
+              type: integer
+            phosphorus:
+              type: integer
+            potassium:
+              type: integer
+        leaf_wetness_duration_hours:
+          type: number
+          format: float
+          nullable: true
+        wind_speed_kmh:
+          type: number
+          format: float
+          nullable: true
+        humidity_percentage:
+          type: number
+          format: float
+          nullable: true
+        precipitation_mm:
+          type: number
+          format: float
+          nullable: true
+        battery_level:
+          type: integer
+        status:
+          type: string
+          enum: [online, offline, calibrating]
+
+    FlightLog:
+      type: object
+      properties:
+        flight_id:
+          type: string
+        drone_id:
+          type: string
+        farm_id:
+          type: string
+        flight_start:
+          type: integer
+          format: int64
+        flight_end:
+          type: integer
+          format: int64
+        battery_start_percentage:
+          type: integer
+        battery_end_percentage:
+          type: integer
+        coverage_percentage:
+          type: number
+          format: float
+        images_captured:
+          type: integer
+        status:
+          type: string
+          enum: [completed, failed, in_progress]
+
+    AgentOutput:
+      type: object
+      properties:
+        agent_name:
+          type: string
+        execution_timestamp:
+          type: integer
+          format: int64
+        status:
+          type: string
+        report_json:
+          type: object
+        s3_report_uri:
+          type: string
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: "ValidationError"
+        message:
+          type: string
+          example: "Missing required parameter: image"
+        timestamp:
+          type: integer
+          format: int64
